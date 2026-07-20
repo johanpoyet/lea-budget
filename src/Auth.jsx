@@ -95,19 +95,19 @@ export default function Auth() {
             </div>
             <form onSubmit={verifyCode}>
               <div className="au-field">
-                <label>Code à 6 chiffres</label>
+                <label>Code reçu par email</label>
                 <input
                   className="au-input au-code"
                   inputMode="numeric"
-                  placeholder="••••••"
-                  maxLength={6}
+                  placeholder="••••••••"
+                  maxLength={8}
                   value={code}
                   onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
                   autoFocus
                 />
               </div>
               {error && <div className="au-err">{error}</div>}
-              <button className="au-btn" disabled={loading || code.trim().length < 6}>
+              <button className="au-btn" disabled={loading || !code.trim()}>
                 {loading ? "Vérification…" : "Valider"}
               </button>
               <button type="button" className="au-link" onClick={() => { setStep("email"); setCode(""); setError(""); }}>
