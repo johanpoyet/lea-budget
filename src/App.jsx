@@ -51,9 +51,21 @@ const rowToTx = (r) => ({
 });
 
 function LoadingScreen() {
+  const css = `
+    .ls-root { min-height: 100vh; display: grid; place-items: center; background: #F6F3EC; }
+    .ls-icon {
+      width: 112px; height: 112px; border-radius: 25px;
+      box-shadow: 0 20px 40px -18px rgba(46,90,71,.45);
+      animation: ls-in .6s cubic-bezier(.2,.8,.2,1) both, ls-pulse 1.8s ease-in-out .6s infinite;
+    }
+    @keyframes ls-in { from { opacity: 0; transform: scale(.7); } to { opacity: 1; transform: scale(1); } }
+    @keyframes ls-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.045); } }
+    @media (prefers-reduced-motion: reduce) { .ls-icon { animation: none; } }
+  `;
   return (
-    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#F6F3EC", color: "#5C6157", fontFamily: "system-ui, sans-serif" }}>
-      Chargement…
+    <div className="ls-root">
+      <style>{css}</style>
+      <img src="/lea-icon.svg" alt="" className="ls-icon" />
     </div>
   );
 }
