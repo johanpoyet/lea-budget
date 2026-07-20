@@ -1,0 +1,27 @@
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Budget Australie">
+  <defs>
+    <clipPath id="tile"><rect x="0" y="0" width="512" height="512" rx="114" ry="114"/></clipPath>
+    <radialGradient id="glow" cx="50%" cy="42%" r="46%">
+      <stop offset="0%" stop-color="#E8BD6A" stop-opacity="0.5"/>
+      <stop offset="70%" stop-color="#D9A441" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#D9A441" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sun" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#EFCC82"/>
+      <stop offset="100%" stop-color="#D49A34"/>
+    </linearGradient>
+  </defs>
+
+  <g clip-path="url(#tile)">
+    <rect x="0" y="0" width="512" height="512" fill="#2E5A47"/>
+    <rect x="0" y="0" width="512" height="512" fill="url(#glow)"/>
+
+    <!-- Soleil / pièce -->
+    <circle cx="256" cy="238" r="92" fill="url(#sun)"/>
+    <circle cx="256" cy="238" r="76" fill="none" stroke="#BE871F" stroke-width="2.5" stroke-opacity="0.4"/>
+
+    <!-- Paysage : deux collines pour la profondeur -->
+    <path d="M0,360 C 80,315 170,298 256,298 C 342,298 432,322 512,346 L512,512 L0,512 Z" fill="#5E8C74"/>
+    <path d="M0,420 C 110,378 220,405 300,398 C 388,390 460,414 512,422 L512,512 L0,512 Z" fill="#21402F"/>
+  </g>
+</svg>
