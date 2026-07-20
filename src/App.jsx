@@ -1,10 +1,12 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
+import { supabase } from "./supabaseClient";
+import Auth from "./Auth";
 
 /* ------------------------------------------------------------------
    Léa — suivi de budget (by Joujou)
    ------------------------------------------------------------------
-   Prototype de design (état local, données de démo).
+   Données persistées dans Supabase (une ligne par utilisateur, via RLS).
    Catégories dynamiques : ajout / suppression par l'utilisateur.
    Les montants sont STOCKÉS en AUD ; l'affichage convertit à la volée.
 ------------------------------------------------------------------- */
@@ -33,49 +35,6 @@ const DEFAULT_CATS = {
 const EMOJI_PRESETS = ["🏠","🛒","🍽️","🚌","✈️","📱","🩹","🛍️","☕","🏄","🎁","💪","🐨","🍺","⛽","🎬","💊","📚","🎧","🧺","💼","🪙","🌱","💰"];
 const COLOR_PRESETS = ["#2E5A47","#3E7C8C","#D9A441","#8B7BA8","#C06B4E","#6B8E7A","#C77D9B","#B8A177","#4A7BA8","#7A9E5C","#B5563F","#9AA0A6"];
 
-let _id = 0;
-const t = (date, cat, amountAUD, note) => ({
-  id: ++_id, date, cat, amountAUD, note, type: DEFAULT_CATS[cat].type,
-});
-
-// Données de démo — une vie de working holiday
-const SEED = [
-  t("2026-07-01", "Loyer", 920, "Auberge Bondi"),
-  t("2026-07-02", "Salaire", 780, "Café — semaine 1"),
-  t("2026-07-02", "Forfait", 35, "Optus"),
-  t("2026-07-03", "Courses", 62, "Woolworths"),
-  t("2026-07-05", "Restos & sorties", 48, "Brunch avec Léa"),
-  t("2026-07-06", "Pourboires", 90, "Weekend"),
-  t("2026-07-08", "Transport", 28, "Opal card"),
-  t("2026-07-09", "Salaire", 810, "Café — semaine 2"),
-  t("2026-07-11", "Shopping", 74, "Maillot + tongs"),
-  t("2026-07-12", "Voyage", 210, "Surf trip Byron Bay"),
-  t("2026-07-14", "Courses", 55, "Coles"),
-  t("2026-07-15", "Santé", 40, "Pharmacie"),
-  t("2026-07-16", "Salaire", 795, "Café — semaine 3"),
-  t("2026-07-18", "Restos & sorties", 33, "Fish & chips"),
-  t("2026-06-01", "Loyer", 900, "Auberge Bondi"),
-  t("2026-06-04", "Salaire", 760, "Café"),
-  t("2026-06-07", "Voyage", 340, "Blue Mountains"),
-  t("2026-06-10", "Courses", 210, "Le mois"),
-  t("2026-06-12", "Salaire", 800, "Café"),
-  t("2026-06-15", "Restos & sorties", 120, "Anniv Marie"),
-  t("2026-06-18", "Salaire", 815, "Café"),
-  t("2026-06-20", "Pourboires", 140, ""),
-  t("2026-06-22", "Transport", 60, "Opal"),
-  t("2026-06-25", "Shopping", 95, "Sac de rando"),
-  t("2026-06-26", "Salaire", 790, "Café"),
-  t("2026-06-28", "Forfait", 35, "Optus"),
-  t("2026-05-02", "Loyer", 880, "Installation"),
-  t("2026-05-03", "Shopping", 260, "Matériel arrivée"),
-  t("2026-05-08", "Salaire", 620, "1re paie"),
-  t("2026-05-12", "Courses", 190, ""),
-  t("2026-05-15", "Salaire", 740, "Café"),
-  t("2026-05-20", "Voyage", 180, "Manly ferry + rando"),
-  t("2026-05-22", "Salaire", 770, "Café"),
-  t("2026-05-27", "Restos & sorties", 85, ""),
-];
-
 const MONTH_LABELS = ["janvier","février","mars","avril","mai","juin","juillet","août","septembre","octobre","novembre","décembre"];
 const ym = (d) => d.slice(0, 7);
 const monthLabel = (key) => {
@@ -85,13 +44,81 @@ const monthLabel = (key) => {
 };
 const shortMonth = (key) => MONTH_LABELS[parseInt(key.split("-")[1], 10) - 1].slice(0, 3);
 
+// Convertit une ligne Supabase `transactions` vers la forme utilisée par l'UI
+const rowToTx = (r) => ({
+  id: r.id, date: r.date, cat: r.category, amountAUD: Number(r.amount_aud),
+  note: r.note || "", type: r.type,
+});
+
+function LoadingScreen() {
+  return (
+    <div style={{ minHeight: "100vh", display: "grid", placeItems: "center", background: "#F6F3EC", color: "#5C6157", fontFamily: "system-ui, sans-serif" }}>
+      Chargement…
+    </div>
+  );
+}
+
 export default function App() {
-  const [tx, setTx] = useState(SEED);
-  const [cats, setCats] = useState(DEFAULT_CATS);
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(true);
+
+  const [tx, setTx] = useState([]);
+  const [cats, setCats] = useState({});
   const [currency, setCurrency] = useState("AUD");
-  const [cursor, setCursor] = useState("2026-07");
+  const [cursor, setCursor] = useState(() => new Date().toISOString().slice(0, 7));
   const [sheetOpen, setSheetOpen] = useState(false);
   const [catSheetOpen, setCatSheetOpen] = useState(false);
+
+  // Auth : récupère la session courante puis écoute les changements
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setAuthLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Données : chargées une fois la session connue (RLS filtre déjà par utilisateur)
+  useEffect(() => {
+    if (!session) { setDataLoading(false); return; }
+    let cancelled = false;
+
+    (async () => {
+      setDataLoading(true);
+
+      let { data: catRows, error: catErr } = await supabase
+        .from("categories").select("*").order("created_at", { ascending: true });
+      if (catErr) console.error(catErr);
+
+      if (!catErr && catRows && catRows.length === 0) {
+        const seed = Object.entries(DEFAULT_CATS).map(([name, c]) => ({
+          user_id: session.user.id, name, icon: c.icon, color: c.color, type: c.type,
+        }));
+        const { data: inserted, error: seedErr } = await supabase.from("categories").insert(seed).select();
+        if (seedErr) console.error(seedErr); else catRows = inserted;
+      }
+
+      const { data: txRows, error: txErr } = await supabase
+        .from("transactions").select("*").order("date", { ascending: true });
+      if (txErr) console.error(txErr);
+
+      if (cancelled) return;
+
+      if (catRows) {
+        const catsObj = {};
+        catRows.forEach((c) => { catsObj[c.name] = { color: c.color, icon: c.icon, type: c.type }; });
+        setCats(catsObj);
+      }
+      if (txRows) setTx(txRows.map(rowToTx));
+      setDataLoading(false);
+    })();
+
+    return () => { cancelled = true; };
+  }, [session]);
 
   const meta = (name) => cats[name] || { color: "#9AA0A6", icon: "•", type: "expense" };
 
@@ -145,27 +172,56 @@ export default function App() {
     setCursor(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`);
   };
 
-  const addTx = (entry) => {
-    setTx((prev) => [...prev, { ...entry, id: ++_id, type: meta(entry.cat).type }]);
+  const addTx = async (entry) => {
+    const type = meta(entry.cat).type;
+    const { data, error } = await supabase
+      .from("transactions")
+      .insert({
+        user_id: session.user.id,
+        date: entry.date,
+        category: entry.cat,
+        amount_aud: entry.amountAUD,
+        note: entry.note,
+        type,
+      })
+      .select()
+      .single();
+    if (error) { console.error(error); return; }
+    setTx((prev) => [...prev, rowToTx(data)]);
     setSheetOpen(false);
     setCursor(ym(entry.date));
   };
 
   // Ajoute une catégorie ; renvoie false si nom vide ou déjà pris
-  const addCategory = ({ name, icon, color, type }) => {
+  const addCategory = async ({ name, icon, color, type }) => {
     const key = (name || "").trim();
     if (!key || cats[key]) return false;
+    const { error } = await supabase
+      .from("categories")
+      .insert({ user_id: session.user.id, name: key, icon, color, type });
+    if (error) { console.error(error); return false; }
     setCats((prev) => ({ ...prev, [key]: { color, icon, type } }));
     return true;
   };
 
   // Supprime une catégorie et réaffecte ses mouvements vers "Autre"
-  const deleteCategory = (name) => {
+  const deleteCategory = async (name) => {
     const type = meta(name).type;
     if (name === FALLBACK[type]) return; // protégée
-    setTx((prev) => prev.map((x) => (x.cat === name ? { ...x, cat: FALLBACK[type], type } : x)));
+    const fallbackName = FALLBACK[type];
+
+    const { error: updErr } = await supabase
+      .from("transactions").update({ category: fallbackName }).eq("category", name);
+    if (updErr) { console.error(updErr); return; }
+
+    const { error: delErr } = await supabase.from("categories").delete().eq("name", name);
+    if (delErr) { console.error(delErr); return; }
+
+    setTx((prev) => prev.map((x) => (x.cat === name ? { ...x, cat: fallbackName, type } : x)));
     setCats((prev) => { const c = { ...prev }; delete c[name]; return c; });
   };
+
+  const signOut = () => { supabase.auth.signOut(); };
 
   const css = `
     @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Hanken+Grotesk:wght@400;500;600;700&display=swap');
@@ -293,6 +349,10 @@ export default function App() {
 
   const maxTrend = Math.max(...trend.map((d) => Math.abs(d.net)), 1);
 
+  if (authLoading) return <LoadingScreen />;
+  if (!session) return <Auth />;
+  if (dataLoading) return <LoadingScreen />;
+
   return (
     <div className="mt-root">
       <style>{css}</style>
@@ -303,6 +363,7 @@ export default function App() {
             <span className="mt-by">by Joujou</span>
           </div>
           <div className="mt-right">
+            <button className="mt-gear" onClick={signOut} aria-label="Se déconnecter">⏻</button>
             <button className="mt-gear" onClick={() => setCatSheetOpen(true)} aria-label="Gérer les catégories">🏷️</button>
             <div className="mt-cur">
               <button className={currency === "AUD" ? "on" : ""} onClick={() => setCurrency("AUD")}>$&nbsp;AUD</button>
@@ -404,8 +465,8 @@ function CategoryForm({ type, onAdd, cta }) {
   const [color, setColor] = useState(COLOR_PRESETS[0]);
   const [err, setErr] = useState("");
 
-  const submit = () => {
-    const ok = onAdd({ name: name.trim(), icon, color, type });
+  const submit = async () => {
+    const ok = await onAdd({ name: name.trim(), icon, color, type });
     if (!ok) { setErr("Ce nom existe déjà ou est vide."); return; }
     setName(""); setErr("");
   };
@@ -502,8 +563,8 @@ function AddSheet({ cats, onClose, onSave, onAddCategory }) {
   const list = Object.keys(cats).filter((c) => cats[c].type === kind);
   const valid = parseFloat(amount) > 0 && cat;
 
-  const handleAddCat = (c) => {
-    const ok = onAddCategory(c);
+  const handleAddCat = async (c) => {
+    const ok = await onAddCategory(c);
     if (ok) { setCat(c.name); setCreating(false); }
     return ok;
   };
