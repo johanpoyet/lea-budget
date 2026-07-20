@@ -1,0 +1,25 @@
+name: Supabase keep-alive
+
+# Le plan gratuit Supabase met un projet en pause après 7 jours sans
+# requête API. On ping l'API deux fois par semaine pour rester bien
+# en dessous de ce seuil.
+on:
+  schedule:
+    - cron: "0 8 * * 1,4" # lundi et jeudi à 08:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        run: |
+          status=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://ggjaydxxbjqmuuguzlyo.supabase.co/rest/v1/categories?select=id&limit=1" \
+            -H "apikey: sb_publishable_GJmMXxMLglyaF3Q7kDJe0Q_Z7bzI4bW" \
+            -H "Authorization: Bearer sb_publishable_GJmMXxMLglyaF3Q7kDJe0Q_Z7bzI4bW")
+          echo "Réponse Supabase: $status"
+          if [ "$status" -ge 400 ]; then
+            echo "Le ping a échoué (code $status)"
+            exit 1
+          fi
