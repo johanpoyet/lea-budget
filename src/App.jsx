@@ -68,6 +68,7 @@ export default function App() {
   const [currency, setCurrency] = useState("AUD");
   const [cursor, setCursor] = useState(() => new Date().toISOString().slice(0, 7));
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [editingTx, setEditingTx] = useState(null);
   const [catSheetOpen, setCatSheetOpen] = useState(false);
 
   // Auth : récupère la session courante puis écoute les changements
@@ -192,6 +193,35 @@ export default function App() {
     setCursor(ym(entry.date));
   };
 
+  const updateTx = async (entry) => {
+    const type = meta(entry.cat).type;
+    const { data, error } = await supabase
+      .from("transactions")
+      .update({
+        date: entry.date,
+        category: entry.cat,
+        amount_aud: entry.amountAUD,
+        note: entry.note,
+        type,
+      })
+      .eq("id", entry.id)
+      .select()
+      .single();
+    if (error) { console.error(error); return; }
+    setTx((prev) => prev.map((x) => (x.id === entry.id ? rowToTx(data) : x)));
+    setSheetOpen(false);
+    setEditingTx(null);
+    setCursor(ym(entry.date));
+  };
+
+  const deleteTx = async (id) => {
+    const { error } = await supabase.from("transactions").delete().eq("id", id);
+    if (error) { console.error(error); return; }
+    setTx((prev) => prev.filter((x) => x.id !== id));
+    setSheetOpen(false);
+    setEditingTx(null);
+  };
+
   // Ajoute une catégorie ; renvoie false si nom vide ou déjà pris
   const addCategory = async ({ name, icon, color, type }) => {
     const key = (name || "").trim();
@@ -283,7 +313,7 @@ export default function App() {
 
     .mt-list-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
     .mt-list-head h3 { margin: 0; }
-    .mt-tx { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); }
+    .mt-tx { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-top: 1px solid var(--line); cursor: pointer; }
     .mt-tx:first-child { border-top: 0; }
     .mt-tx .ic { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; font-size: 17px; flex: none; }
     .mt-tx .mid { flex: 1; min-width: 0; }
@@ -322,6 +352,9 @@ export default function App() {
 
     .mt-save { width: 100%; border: 0; background: var(--ink); color: #F6F3EC; font-family: inherit; font-weight: 600; font-size: 16px; padding: 15px; border-radius: 14px; cursor: pointer; margin-top: 6px; }
     .mt-save:disabled { opacity: .4; cursor: default; }
+
+    .mt-deltx { width: 100%; border: 1px solid var(--clay); background: transparent; color: var(--clay); font-family: inherit; font-weight: 600; font-size: 14px; padding: 13px; border-radius: 14px; cursor: pointer; margin-top: 10px; }
+    .mt-deltx.confirm { background: var(--clay); color: #fff; }
 
     .mt-catrow { display: flex; align-items: center; gap: 12px; padding: 11px 2px; border-top: 1px solid var(--line); }
     .mt-catrow:first-child { border-top: 0; }
@@ -437,7 +470,7 @@ export default function App() {
             <div className="mt-empty">Aucune transaction ce mois-ci.<br />Appuie sur « Ajouter » pour commencer.</div>
           ) : (
             monthTx.map((x) => (
-              <div className="mt-tx" key={x.id}>
+              <div className="mt-tx" key={x.id} onClick={() => { setEditingTx(x); setSheetOpen(true); }}>
                 <div className="ic" style={{ background: meta(x.cat).color + "1E" }}>{meta(x.cat).icon}</div>
                 <div className="mid">
                   <div className="c">{x.cat}</div>
@@ -450,9 +483,19 @@ export default function App() {
         </div>
       </div>
 
-      <button className="mt-fab" onClick={() => setSheetOpen(true)}><span style={{ fontSize: 18, lineHeight: 1 }}>+</span> Ajouter</button>
+      <button className="mt-fab" onClick={() => { setEditingTx(null); setSheetOpen(true); }}><span style={{ fontSize: 18, lineHeight: 1 }}>+</span> Ajouter</button>
 
-      {sheetOpen && <AddSheet cats={cats} onClose={() => setSheetOpen(false)} onSave={addTx} onAddCategory={addCategory} />}
+      {sheetOpen && (
+        <AddSheet
+          cats={cats}
+          editing={editingTx}
+          onClose={() => { setSheetOpen(false); setEditingTx(null); }}
+          onSave={addTx}
+          onUpdate={updateTx}
+          onDelete={deleteTx}
+          onAddCategory={addCategory}
+        />
+      )}
       {catSheetOpen && <CategorySheet cats={cats} usage={usage} onClose={() => setCatSheetOpen(false)} onAdd={addCategory} onDelete={deleteCategory} />}
     </div>
   );
@@ -551,14 +594,15 @@ function CategorySheet({ cats, usage, onClose, onAdd, onDelete }) {
   );
 }
 
-/* --- Feuille d'ajout de transaction --- */
-function AddSheet({ cats, onClose, onSave, onAddCategory }) {
-  const [kind, setKind] = useState("expense");
-  const [amount, setAmount] = useState("");
-  const [cat, setCat] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
-  const [note, setNote] = useState("");
+/* --- Feuille d'ajout / modification de transaction --- */
+function AddSheet({ cats, editing, onClose, onSave, onUpdate, onDelete, onAddCategory }) {
+  const [kind, setKind] = useState(editing ? editing.type : "expense");
+  const [amount, setAmount] = useState(editing ? String(editing.amountAUD) : "");
+  const [cat, setCat] = useState(editing ? editing.cat : "");
+  const [date, setDate] = useState(editing ? editing.date : new Date().toISOString().slice(0, 10));
+  const [note, setNote] = useState(editing ? editing.note : "");
   const [creating, setCreating] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   const list = Object.keys(cats).filter((c) => cats[c].type === kind);
   const valid = parseFloat(amount) > 0 && cat;
@@ -571,7 +615,9 @@ function AddSheet({ cats, onClose, onSave, onAddCategory }) {
 
   const submit = () => {
     if (!valid) return;
-    onSave({ date, cat, amountAUD: parseFloat(amount), note: note.trim() });
+    const entry = { date, cat, amountAUD: parseFloat(amount), note: note.trim() };
+    if (editing) onUpdate({ ...entry, id: editing.id });
+    else onSave(entry);
   };
 
   return (
@@ -579,7 +625,7 @@ function AddSheet({ cats, onClose, onSave, onAddCategory }) {
       <div className="mt-scrim" onClick={onClose} />
       <div className="mt-sheet">
         <div className="grab" />
-        <h2>Nouvelle transaction</h2>
+        <h2>{editing ? "Modifier la transaction" : "Nouvelle transaction"}</h2>
         <div style={{ height: 12 }} />
 
         <div className="mt-seg">
@@ -622,7 +668,21 @@ function AddSheet({ cats, onClose, onSave, onAddCategory }) {
           <input className="mt-input" placeholder="Ex. brunch avec Léa" value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
 
-        <button className="mt-save" disabled={!valid} onClick={submit}>Enregistrer</button>
+        <button className="mt-save" disabled={!valid} onClick={submit}>
+          {editing ? "Enregistrer les modifications" : "Enregistrer"}
+        </button>
+
+        {editing && (
+          confirmDelete ? (
+            <button className="mt-deltx confirm" onClick={() => onDelete(editing.id)}>
+              Confirmer la suppression
+            </button>
+          ) : (
+            <button className="mt-deltx" onClick={() => setConfirmDelete(true)}>
+              Supprimer cette transaction
+            </button>
+          )
+        )}
       </div>
     </>
   );
