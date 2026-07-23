@@ -50,6 +50,18 @@ const rowToTx = (r) => ({
   note: r.note || "", type: r.type,
 });
 
+// Convertit une ligne Supabase `checklist_items` vers la forme utilisée par l'UI
+const rowToItem = (r) => ({ id: r.id, title: r.title, status: r.status });
+
+// Cycle des états d'une tâche : à faire → en cours → fait → à faire
+const NEXT_STATUS = { todo: "doing", doing: "done", done: "todo" };
+const STATUS_META = {
+  todo:  { label: "À faire",  icon: "○", color: "#9AA0A6" },
+  doing: { label: "En cours", icon: "◐", color: "#D9A441" },
+  done:  { label: "Fait",     icon: "✓", color: "#2E5A47" },
+};
+const STATUS_ORDER = ["todo", "doing", "done"];
+
 function LoadingScreen() {
   const css = `
     .ls-root { min-height: 100vh; display: grid; place-items: center; background: #F6F3EC; }
@@ -77,6 +89,8 @@ export default function App() {
 
   const [tx, setTx] = useState([]);
   const [cats, setCats] = useState({});
+  const [checklist, setChecklist] = useState([]);
+  const [view, setView] = useState("budget"); // "budget" | "checklist"
   const [currency, setCurrency] = useState("AUD");
   const [cursor, setCursor] = useState(() => new Date().toISOString().slice(0, 7));
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -119,6 +133,10 @@ export default function App() {
         .from("transactions").select("*").order("date", { ascending: true });
       if (txErr) console.error(txErr);
 
+      const { data: itemRows, error: itemErr } = await supabase
+        .from("checklist_items").select("*").order("created_at", { ascending: true });
+      if (itemErr) console.error(itemErr);
+
       if (cancelled) return;
 
       if (catRows) {
@@ -127,6 +145,7 @@ export default function App() {
         setCats(catsObj);
       }
       if (txRows) setTx(txRows.map(rowToTx));
+      if (itemRows) setChecklist(itemRows.map(rowToItem));
       setDataLoading(false);
     })();
 
@@ -263,6 +282,35 @@ export default function App() {
     setCats((prev) => { const c = { ...prev }; delete c[name]; return c; });
   };
 
+  // --- Checklist ---
+  const addItem = async (title) => {
+    const t = (title || "").trim();
+    if (!t) return;
+    const { data, error } = await supabase
+      .from("checklist_items")
+      .insert({ user_id: session.user.id, title: t, status: "todo" })
+      .select()
+      .single();
+    if (error) { console.error(error); return; }
+    setChecklist((prev) => [...prev, rowToItem(data)]);
+  };
+
+  const cycleItem = async (id) => {
+    const item = checklist.find((i) => i.id === id);
+    if (!item) return;
+    const next = NEXT_STATUS[item.status];
+    setChecklist((prev) => prev.map((i) => (i.id === id ? { ...i, status: next } : i)));
+    const { error } = await supabase.from("checklist_items").update({ status: next }).eq("id", id);
+    if (error) { console.error(error); setChecklist((prev) => prev.map((i) => (i.id === id ? { ...i, status: item.status } : i))); }
+  };
+
+  const deleteItem = async (id) => {
+    const prev = checklist;
+    setChecklist((p) => p.filter((i) => i.id !== id));
+    const { error } = await supabase.from("checklist_items").delete().eq("id", id);
+    if (error) { console.error(error); setChecklist(prev); }
+  };
+
   const signOut = () => { supabase.auth.signOut(); };
 
   const css = `
@@ -389,6 +437,41 @@ export default function App() {
     .mt-addbtn { width: 100%; border: 1px solid var(--euc); background: transparent; color: var(--euc); font-family: inherit; font-weight: 600; font-size: 14px; padding: 12px; border-radius: 12px; cursor: pointer; margin-top: 14px; }
     .mt-addbtn:disabled { opacity: .4; cursor: default; }
 
+    .mt-tabs { display: flex; background: #EFEADF; border-radius: 999px; padding: 4px; gap: 2px; margin-bottom: 18px; }
+    .mt-tabs button { flex: 1; border: 0; background: transparent; cursor: pointer; font-family: inherit; font-weight: 600; font-size: 14px; padding: 10px; border-radius: 999px; color: var(--ink-soft); display: flex; align-items: center; justify-content: center; gap: 6px; transition: all .2s ease; }
+    .mt-tabs button.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.07); }
+
+    .cl-progress { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+    .cl-progress .bar { flex: 1; height: 8px; border-radius: 999px; background: #EFEADF; overflow: hidden; }
+    .cl-progress .bar i { display: block; height: 100%; border-radius: 999px; background: var(--euc); transition: width .3s ease; }
+    .cl-progress .lbl { font-size: 13px; font-weight: 600; color: var(--ink-soft); white-space: nowrap; }
+
+    .cl-add { display: flex; gap: 8px; margin-bottom: 16px; }
+    .cl-add input { flex: 1; border: 1px solid var(--line); background: var(--card); border-radius: 12px; padding: 12px 14px; font-family: inherit; font-size: 15px; color: var(--ink); }
+    .cl-add input:focus { outline: none; border-color: var(--euc); }
+    .cl-add button { border: 0; background: var(--ink); color: #F6F3EC; width: 46px; border-radius: 12px; cursor: pointer; font-size: 22px; flex: none; }
+    .cl-add button:disabled { opacity: .35; cursor: default; }
+
+    .cl-filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .cl-filters button { border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 7px 13px; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; color: var(--ink-soft); display: inline-flex; align-items: center; gap: 6px; transition: all .15s ease; }
+    .cl-filters button .n { background: #EFEADF; border-radius: 999px; padding: 0 7px; font-size: 11px; line-height: 18px; min-width: 18px; text-align: center; }
+    .cl-filters button.on { background: var(--ink); border-color: var(--ink); color: #F6F3EC; }
+    .cl-filters button.on .n { background: rgba(255,255,255,.2); color: #F6F3EC; }
+
+    .cl-group { margin-bottom: 8px; }
+    .cl-group h4 { font-size: 12px; font-weight: 600; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .5px; margin: 14px 4px 8px; display: flex; align-items: center; gap: 7px; }
+    .cl-group h4 .n { background: #EFEADF; border-radius: 999px; padding: 1px 8px; font-size: 11px; }
+
+    .cl-item { display: flex; align-items: center; gap: 12px; background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-bottom: 8px; }
+    .cl-check { width: 30px; height: 30px; border-radius: 999px; border: 2px solid var(--line); background: transparent; cursor: pointer; flex: none; display: grid; place-items: center; font-size: 15px; font-weight: 700; line-height: 1; transition: all .18s ease; }
+    .cl-item .title { flex: 1; font-size: 15px; font-weight: 500; word-break: break-word; }
+    .cl-item.done .title { color: var(--ink-soft); text-decoration: line-through; }
+    .cl-trash { border: 0; background: transparent; cursor: pointer; color: var(--ink-soft); font-size: 16px; padding: 6px; border-radius: 8px; flex: none; }
+    .cl-trash:hover { color: var(--clay); }
+
+    .cl-empty { text-align: center; padding: 44px 16px; color: var(--ink-soft); font-size: 14px; }
+    .cl-empty .em { font-size: 34px; display: block; margin-bottom: 10px; }
+
     @media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
   `;
 
@@ -417,6 +500,15 @@ export default function App() {
           </div>
         </header>
 
+        <div className="mt-tabs">
+          <button className={view === "budget" ? "on" : ""} onClick={() => setView("budget")}>💰 Budget</button>
+          <button className={view === "checklist" ? "on" : ""} onClick={() => setView("checklist")}>✅ Checklist</button>
+        </div>
+
+        {view === "checklist" ? (
+          <ChecklistView items={checklist} onAdd={addItem} onCycle={cycleItem} onDelete={deleteItem} />
+        ) : (
+        <>
         <div className="mt-month">
           <button onClick={() => shiftMonth(-1)} aria-label="Mois précédent">‹</button>
           <span>{monthLabel(cursor)}</span>
@@ -493,9 +585,13 @@ export default function App() {
             ))
           )}
         </div>
+        </>
+        )}
       </div>
 
-      <button className="mt-fab" onClick={() => { setEditingTx(null); setSheetOpen(true); }}><span style={{ fontSize: 18, lineHeight: 1 }}>+</span> Ajouter</button>
+      {view === "budget" && (
+        <button className="mt-fab" onClick={() => { setEditingTx(null); setSheetOpen(true); }}><span style={{ fontSize: 18, lineHeight: 1 }}>+</span> Ajouter</button>
+      )}
 
       {sheetOpen && (
         <AddSheet
@@ -509,6 +605,100 @@ export default function App() {
         />
       )}
       {catSheetOpen && <CategorySheet cats={cats} usage={usage} onClose={() => setCatSheetOpen(false)} onAdd={addCategory} onDelete={deleteCategory} />}
+    </div>
+  );
+}
+
+/* --- Vue Checklist : tâches groupées par état (à faire / en cours / fait) --- */
+function ChecklistView({ items, onAdd, onCycle, onDelete }) {
+  const [draft, setDraft] = useState("");
+  const [confirm, setConfirm] = useState(null);
+  const [filter, setFilter] = useState("all"); // "all" | "todo" | "doing" | "done"
+
+  const submit = () => {
+    if (!draft.trim()) return;
+    onAdd(draft);
+    setDraft("");
+  };
+
+  const done = items.filter((i) => i.status === "done").length;
+  const pct = items.length ? Math.round((done / items.length) * 100) : 0;
+  const counts = { all: items.length };
+  STATUS_ORDER.forEach((s) => { counts[s] = items.filter((i) => i.status === s).length; });
+
+  // "all" → groupé par état ; sinon → un seul groupe filtré
+  const shownStatuses = filter === "all" ? STATUS_ORDER : [filter];
+
+  return (
+    <div className="mt-card">
+      <div className="cl-progress">
+        <div className="bar"><i style={{ width: `${pct}%` }} /></div>
+        <span className="lbl tnum">{done} / {items.length} faites</span>
+      </div>
+
+      <div className="cl-add">
+        <input
+          placeholder="Nouvelle tâche…"
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+        />
+        <button onClick={submit} disabled={!draft.trim()} aria-label="Ajouter la tâche">+</button>
+      </div>
+
+      {items.length > 0 && (
+        <div className="cl-filters">
+          <button className={filter === "all" ? "on" : ""} onClick={() => setFilter("all")}>
+            Toutes <span className="n tnum">{counts.all}</span>
+          </button>
+          {STATUS_ORDER.map((s) => (
+            <button key={s} className={filter === s ? "on" : ""} onClick={() => setFilter(s)}>
+              {STATUS_META[s].label} <span className="n tnum">{counts[s]}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {items.length === 0 ? (
+        <div className="cl-empty">
+          <span className="em">🗒️</span>
+          Aucune tâche pour l'instant.<br />Ajoute la première ci-dessus.
+        </div>
+      ) : counts[filter] === 0 && filter !== "all" ? (
+        <div className="cl-empty">
+          <span className="em">✨</span>
+          Aucune tâche « {STATUS_META[filter].label} ».
+        </div>
+      ) : (
+        shownStatuses.map((status) => {
+          const group = items.filter((i) => i.status === status);
+          if (group.length === 0) return null;
+          const m = STATUS_META[status];
+          return (
+            <div className="cl-group" key={status}>
+              {filter === "all" && <h4>{m.label} <span className="n tnum">{group.length}</span></h4>}
+              {group.map((i) => (
+                <div className={"cl-item" + (status === "done" ? " done" : "")} key={i.id}>
+                  <button
+                    className="cl-check"
+                    onClick={() => onCycle(i.id)}
+                    style={{ borderColor: m.color, color: m.color, background: status === "done" ? m.color + "18" : "transparent" }}
+                    aria-label={`État : ${m.label}. Changer.`}
+                  >
+                    {m.icon}
+                  </button>
+                  <span className="title">{i.title}</span>
+                  {confirm === i.id ? (
+                    <button className="cl-trash" style={{ color: "var(--clay)" }} onClick={() => { onDelete(i.id); setConfirm(null); }} aria-label="Confirmer la suppression">✓&nbsp;sûr ?</button>
+                  ) : (
+                    <button className="cl-trash" onClick={() => setConfirm(i.id)} aria-label={"Supprimer " + i.title}>🗑</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          );
+        })
+      )}
     </div>
   );
 }
